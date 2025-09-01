@@ -904,95 +904,82 @@ router.post('/:id/owner-response', auth, requirePropertyOwner, async (req, res) 
   }
 });
 
-router.post('/:bookingId/payment-receipt', auth, upload.fields([
-  { name: 'payment_receipt', maxCount: 1 },
-  { name: 'nic_document', maxCount: 1 }
-]), processFileUpload, async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-    const userId = req.user.id;
+/**
+ * POST /api/bookings/:id/upload-receipt
+ * Handle receipt and NIC photo upload (added for booking flow)
+ */
+router.post('/:id/upload-receipt', auth, upload.fields([
+  { name: 'receipt', maxCount: 1 },
+  { name: 'nic', maxCount: 1 }
+]), async (req, res) => {
+  const bookingId = req.params.id;
+  const userId = req.user.id;
 
-    // Validate booking belongs to user and is approved
+  try {
+    // Verify booking belongs to user and is approved
     const booking = await query(
-      'SELECT * FROM booking_requests WHERE id = ? AND user_id = ? AND status = "approved"',
+      'SELECT * FROM booking_requests WHERE id = ? AND user_id = ?',
       [bookingId, userId]
     );
 
     if (booking.length === 0) {
       return res.status(404).json({
-        success: false,
-        error: 'Booking not found',
-        message: 'Booking not found or not approved for payment'
+        error: 'Booking not found'
       });
     }
 
-    const bookingData = booking[0];
-
-    // Check if files were uploaded
-    if (!req.uploadedFiles?.payment_receipt?.[0] || !req.uploadedFiles?.nic_document?.[0]) {
+    if (booking[0].status !== 'approved') {
       return res.status(400).json({
-        success: false,
-        error: 'Missing files',
-        message: 'Both payment receipt and NIC document are required'
+        error: 'Booking must be approved for payment submission'
       });
     }
 
-    const receiptFile = req.uploadedFiles.payment_receipt[0];
-    const nicFile = req.uploadedFiles.nic_document[0];
+    if (!req.files || !req.files.receipt || !req.files.nic) {
+      return res.status(400).json({
+        error: 'Both receipt and NIC photo are required'
+      });
+    }
 
-    // Update booking with payment proof
+    const receiptUrl = `/uploads/${req.files.receipt[0].filename}`;
+    const nicUrl = `/uploads/${req.files.nic[0].filename}`;
+
+    // Update booking with receipt and NIC
     await query(
       `UPDATE booking_requests 
-       SET status = 'payment_submitted', 
-           payment_proof_url = ?, 
-           verification_document_url = ?, 
-           verification_document_type = 'NIC', 
-           payment_method = 'receipt_upload', 
-           payment_submitted_at = NOW() 
+       SET payment_proof_url = ?, verification_document_url = ?, 
+           verification_document_type = 'nic', payment_method = 'receipt_upload',
+           status = 'payment_submitted', payment_submitted_at = NOW()
        WHERE id = ?`,
-      [receiptFile.url, nicFile.url, bookingId]
+      [receiptUrl, nicUrl, bookingId]
     );
 
-    // Notify property owner about payment submission
+    // Notify owner about receipt submission
     await query(
-      `INSERT INTO notifications 
-       (user_id, type, title, message, data, booking_id, property_id, from_user_id) 
+      `INSERT INTO notifications (user_id, type, title, message, booking_id, from_user_id, data)
        VALUES (?, 'payment_submitted', 'Payment Receipt Submitted', 
-               'A tenant has submitted payment receipt and verification documents for your property booking.', 
-               ?, ?, ?, ?)`,
+               'A tenant has submitted payment receipt and NIC for review.', ?, ?, ?)`,
       [
-        bookingData.property_owner_id,
-        JSON.stringify({
-          booking_id: bookingId,
-          tenant_name: `${bookingData.first_name} ${bookingData.last_name}`,
-          amount: bookingData.advance_amount,
-          receipt_url: receiptFile.url,
-          nic_url: nicFile.url
-        }),
+        booking[0].property_owner_id,
         bookingId,
-        bookingData.property_id,
-        userId
+        userId,
+        JSON.stringify({ receipt_url: receiptUrl, nic_url: nicUrl })
       ]
     );
 
     res.json({
-      success: true,
-      message: 'Payment receipt and documents uploaded successfully',
-      data: {
-        receipt_url: receiptFile.url,
-        nic_url: nicFile.url,
-        booking_status: 'payment_submitted'
-      }
+      message: 'Payment receipt and NIC uploaded successfully',
+      status: 'payment_submitted'
     });
+
   } catch (error) {
-    console.error('Error uploading payment receipt:', error);
+    console.error('Error uploading receipt:', error);
     res.status(500).json({
-      success: false,
       error: 'Upload failed',
-      message: 'Failed to upload payment documents'
+      message: 'Unable to upload documents. Please try again.'
     });
   }
 });
+
 /**
  * POST /api/bookings/:id/stripe-payment
  * Handle Stripe payment confirmation (added for booking flow)
