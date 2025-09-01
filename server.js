@@ -17,6 +17,7 @@ const bookingRoutes = require('./routes/bookings');
 const uploadRoutes = require('./routes/upload');
 const { router: notificationRoutes } = require('./routes/notifications');
 const settingsRoutes = require('./routes/settings');
+const paymentRoutes = require('./routes/payments');
 
 const app = express();
 
@@ -61,7 +62,7 @@ const isDevelopment = process.env.NODE_ENV === 'development';
 // General rate limiter - more lenient for development
 const limiter = rateLimit({
   windowMs: 15 * 60 * 10000, // 15 minutes
-  max: isDevelopment ? 10000 : 1000, // 1000 requests for dev, 100 for production
+  max: isDevelopment ? 100000 : 10000, // 1000 requests for dev, 100 for production
   message: {
     error: 'Too many requests',
     message: 'Too many requests from this IP, please try again later.',
@@ -132,6 +133,7 @@ app.use('/api/bookings', bookingRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/payments', paymentRoutes);
 
 app.get('/health', async (req, res) => {
   try {
